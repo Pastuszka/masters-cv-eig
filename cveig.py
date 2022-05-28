@@ -31,19 +31,19 @@ def edge_splitting(A, eps, is_directed=False):
     A_full = A
     if not is_directed:
         A = sparse.dok_array(sparse.triu(A))
-    A_train = sparse.dok_array(A.shape)
+    A_test = sparse.dok_array(A.shape)
     ix, iy = A.nonzero()
     for x, y in zip(ix, iy):
-        A_train[x, y] = binom.rvs(A[x, y], eps)
+        A_test[x, y] = binom.rvs(A[x, y], eps)
 
         if not is_directed and x != y:
-            A_train[y, x] = A_train[x, y]
+            A_test[y, x] = A_test[x, y]
     
-    A_test = A_full - A_train
+    A_train = A_full - A_test
     return A_train, A_test
 
 
-def test_stat(A, A_test, x, eps):
+def test_stat_2(A, A_test, x, eps):
     x = x.flatten()
     lam_test = x.T @ A_test @ x
     x2 = x**2
@@ -51,18 +51,27 @@ def test_stat(A, A_test, x, eps):
     sigma = np.sqrt(2*eps*(x2).T @ A @ x2 - eps*(x2).T @ A_diag @ x2)
     return lam_test / sigma
 
+def test_stat(A, A_test, x, eps):
+    x = x.flatten()
+    lam_test = x.T @ A_test @ x
+    x2 = x ** 2
+    A_diag = A.diagonal()
+    sigma = np.sqrt(2 * eps * (x2).T @ A @ x2 - eps * np.sum(x2 * A_diag * x2))
+    return lam_test / sigma
 
 def norm_reg_matrix(A):
-    tau = A.sum() / A.shape[0]
+    d = A.sum(1)
+    tau = np.mean(d)
+    
     if tau == 0:
         return A
-    D = sparse.diags((A.diagonal() + tau) ** (-1/2))
+    D = sparse.diags(1 / np.sqrt(d + tau))
     return D @ A @ D
 
 
 def eig_cv(A, kmax, eps=0.2, alpha=0.05,
            folds=5, normalize=True, is_directed=False):
-    t = np.empty((folds, kmax-1))
+    t = np.empty((folds, kmax))
 
     for i in range(folds):
         A_train, A_test = edge_splitting(A, eps, is_directed)
@@ -75,19 +84,22 @@ def eig_cv(A, kmax, eps=0.2, alpha=0.05,
             v = e.eigenvectors
             print(f"Eigs did not converge. Computed {len(w)} eigenvectors")
 
-        ind = np.argsort(w)[::-1]
+        ind = np.argsort(np.abs(w))[::-1]
         v = v[:, ind]
-        for j in range(1, kmax):
+        for j in range(0, kmax):
+            if j >= len(w):
+                t[i, j] = np.nan
+                continue
             eigenvec = v[:,j].real
-            t[i,j-1] = test_stat(A, A_test, eigenvec, eps)
-    t_mean = t.mean(0)
+            t[i,j] = test_stat(A, A_test, eigenvec, eps)
+    t_mean = np.nanmean(t, 0)
     p_val = 1 - norm.cdf(t_mean)
     p_val_greater = p_val >= alpha
     if any(p_val_greater):
         infer = np.min(np.nonzero(p_val_greater))
     else:
         infer = len(p_val_greater)
-    return infer + 1
+    return infer
 
 
 def eig_cv_mod(A, kmax, eps=0.2, normalize=True, is_directed=False):

@@ -21,7 +21,7 @@ def dc_sbm(theta, z, B, symmetric=True, expected_degree=None):
     P = theta2 * B_z
     if expected_degree:
         P = P * expected_degree * n / np.sum(P)
-
+    P[P>1] = 1
     E = binom.rvs(1, P)
 
     if symmetric:
