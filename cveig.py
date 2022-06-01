@@ -27,7 +27,7 @@ def dc_sbm(theta, z, B, symmetric=True, expected_degree=None):
     return E
 
 
-def edge_splitting(A, eps, is_directed=False):
+def edge_splitting_old(A, eps, is_directed=False):
     A_full = A
     if not is_directed:
         A = sparse.dok_array(sparse.triu(A))
@@ -40,6 +40,18 @@ def edge_splitting(A, eps, is_directed=False):
             A_test[y, x] = A_test[x, y]
     
     A_train = A_full - A_test
+    return A_train, A_test
+
+def edge_splitting(A, eps, is_directed=False):
+    A_to_split = A
+    if not is_directed:
+        A_to_split =  sparse.dok_array(sparse.triu(A_to_split), dtype=int)
+    A_test = sparse.dok_array(A.shape, dtype=int)
+    ix, iy = A_to_split.nonzero()
+    A_test[ix, iy] = binom.rvs(A_to_split[ix, iy].todense(), eps)
+    if not is_directed:
+        A_test[iy, ix] = A_test[ix, iy]
+    A_train = A - A_test
     return A_train, A_test
 
 
