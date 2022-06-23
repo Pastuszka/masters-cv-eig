@@ -3,46 +3,27 @@ from scipy import sparse
 from scipy.sparse.linalg import ArpackNoConvergence
 from scipy.stats import norm, binom
 from scipy.linalg import interpolative
+from numpy import ndarray
 
 
-def simple_block_connectivity_matrix(nblocks, p_within, p_between):
-    B = np.full((nblocks, nblocks), p_between)
-    np.fill_diagonal(B, p_within)
-    return B
+def edge_splitting(A, eps: float,
+                   is_directed: bool = False):
+    """Performs the edge splitting procedure.
 
+    Splits the adjacency matrix into train and test. Each edge from the
+    original matrix is put into the test matrix with probability eps. Otherwise
+    it is put into the train matrix.
 
-def dc_sbm(theta, z, B, symmetric=True, expected_degree=None):
-    n = len(theta)
-    theta2 = np.outer(theta, theta)
-    B_z = B[np.ix_(z,z)]
-    P = theta2 * B_z
-    if expected_degree:
-        P = P * expected_degree * n / np.sum(P)
+    Args:
+        A (sparray): Adjacency matrix as scipy sparse array.
+        eps (float): Probability of putting an edge in test matrix.
+        is_directed (bool): Should the graph be treated as directed. If false,
+            only the upper triangular is considered during splitting, and is
+            then mirrored to retain symmetry.
 
-    E = binom.rvs(1, P)
-
-    if symmetric:
-        E = np.triu(E)
-        E = E.T + np.triu(E, 1)
-    return E
-
-
-def edge_splitting_old(A, eps, is_directed=False):
-    A_full = A
-    if not is_directed:
-        A = sparse.dok_array(sparse.triu(A))
-    A_test = sparse.dok_array(A.shape)
-    ix, iy = A.nonzero()
-    for x, y in zip(ix, iy):
-        A_test[x, y] = binom.rvs(A[x, y], eps)
-
-        if not is_directed and x != y:
-            A_test[y, x] = A_test[x, y]
-    
-    A_train = A_full - A_test
-    return A_train, A_test
-
-def edge_splitting(A, eps, is_directed=False):
+    Returns:
+        tuple[sparray, sparray]: Train and test adjacency matrices
+    """
     A_to_split = A
     if not is_directed:
         A_to_split =  sparse.dok_array(sparse.triu(A_to_split), dtype=int)
@@ -55,36 +36,63 @@ def edge_splitting(A, eps, is_directed=False):
     return A_train, A_test
 
 
-def test_stat_2(A, A_test, x, eps):
-    x = x.flatten()
-    lam_test = x.T @ A_test @ x
-    x2 = x**2
-    A_diag = sparse.diags(A.diagonal())
-    sigma = np.sqrt(2*eps*(x2).T @ A @ x2 - eps*(x2).T @ A_diag @ x2)
-    return lam_test / sigma
+def test_stat(A, A_test, x: ndarray, eps) -> float:
+    """Computes the test statistic in the CV eigenvalues algorithm.
 
-def test_stat(A, A_test, x, eps):
+    Args:
+        A (sparray): Full adjacency matrix of the graph.
+        A_test (sparray): Test adjacency matrix obtained from edge splitting.
+        x (ndarray): Eigenvector of the train adjacency matrix.
+        eps (float): splitting probability used in edge splitting.
+
+    Returns:
+        float: Value of the test statistic.
+    """
     x = x.flatten()
     lam_test = x.T @ A_test @ x
     x2 = x ** 2
     A_diag = A.diagonal()
     sigma = np.sqrt(2 * eps * (x2).T @ A @ x2 - eps * np.sum(x2 * A_diag * x2))
-    return lam_test / sigma
+    t = lam_test / sigma
+    return t
 
 def norm_reg_matrix(A):
+    """Computes the normalized and regularized adjacency matrix.
+
+    Args:
+        A (sparray): Adjacency matrix.
+
+    Returns:
+        sparray: The normalized and regularized adjacency matrix.
+    """
     d = A.sum(1)
     tau = np.mean(d)
     
     if tau == 0:
         return A
     D = sparse.diags(1 / np.sqrt(d + tau))
-    return D @ A @ D
+    L = D @ A @ D
+    return L
 
 
-def eig_cv(A, kmax, eps=0.2, alpha=0.05,
-           folds=5, normalize=True, is_directed=False):
+def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
+           folds: int = 5, normalize: bool = True,
+           is_directed: bool = False) -> int:
+    """Estimates the graph dimension using cross-validated eigenvalues.
+
+    Args:
+        A (sparray): Adjacency matrix
+        kmax (int): maximal graph dimension to consider
+        eps (float): splitting probability for edge splitting
+        alpha (float): significance level for the test statistic
+        folds (int): number of cv folds to perform
+        normalize (bool): should the matrix A be normalized and regularized
+        is_directed (bool): should the graph be treated as directed
+
+    Returns:
+        int: The computed dimension of the graph.
+    """
     t = np.empty((folds, kmax))
-
     for i in range(folds):
         A_train, A_test = edge_splitting(A, eps, is_directed)
         if normalize:
@@ -108,13 +116,29 @@ def eig_cv(A, kmax, eps=0.2, alpha=0.05,
     p_val = 1 - norm.cdf(t_mean)
     p_val_greater = p_val >= alpha
     if any(p_val_greater):
-        infer = np.min(np.nonzero(p_val_greater))
+        k = np.min(np.nonzero(p_val_greater))
     else:
-        infer = len(p_val_greater)
-    return infer
+        k = len(p_val_greater)
+    return k
 
 
-def eig_cv_mod(A, kmax, eps=0.2, normalize=True, is_directed=False):
+def eig_cv_mod(A, kmax: int, eps: float = 0.2,
+               normalize: bool = True, is_directed: bool = False) -> int:
+    """Estimates the graph dimension using the modifed CV eigenvalues.
+
+    This version of the algortihm is used in some technical proofs in the
+    CV eigenvalues paper. Not recommended in real uses.
+
+    Args:
+        A (sparray): Adjacency matrix.
+        kmax (int): Maximal graph dimension to consider,
+        eps (float): Splitting probability for edge splitting,
+        normalize (bool): Should the matrix A be normalized and regularized,
+        is_directed (bool): Should the graph be treated as directed,
+
+    Returns:
+        int: The computed dimension of the graph.
+    """
     A_train, A_test = edge_splitting(A, eps, is_directed)
     k = 1
 
@@ -147,7 +171,8 @@ def eig_cv_mod(A, kmax, eps=0.2, normalize=True, is_directed=False):
     return k
 
 
-def find_eigenvectors(H, t, n):
+def _find_eigenvectors(H, t, n):
+    """Supporting function used in the B-H algorithm"""
     w, v = np.linalg.eig(H)
     v = v.T
     sorted_eig = sorted(zip(w, v), key=lambda x: x[0])[::-1]
@@ -162,33 +187,61 @@ def find_eigenvectors(H, t, n):
     return np.array([vec for val, vec in smallest]).T
 
 
-def bethe_hessian_matrix(r, A, n, d):
+def bethe_hessian_matrix(r: float, A, d: int = None) -> ndarray:
+    """Computes the Bethe-Hessian matrix of A.
+
+    Args:
+        r (float): The r parameter of the B-H matrix.
+        A (sparray): Adjacency matrix.
+        d (int, optional): The node dimensions. Computed in not given.
+
+    Returns:
+        ndarray: The Bethe-Hessian matrix.
+    """
     if d is None:
         d = np.sum(A, axis=1)
-    if n is None:
-        n = len(d)
+    n = len(d)
     I = np.identity(n)
     D = np.diag(d)
     return (r**2 - 1)*I - r*A + D
 
 
-def bethe_hessian(A, t=5, r=None):
+def bethe_hessian(A, t: float = 5.0, r: float = None) -> int:
+    """Estimates the graph dimension using the Bethe-Hessian matrix.
+
+    Args:
+        A (sparray): Adjacency matrix.
+        t (float): The t parameter in the algorithm. Defaults to 5.0
+        r (float, optional): The r parameter in the algorithm. If not provided,
+            recommended value is computed.
+
+    Returns:
+        int: The computed dimension of the graph.
+    """
     d = A.sum(1)
     A = A.todense()
     n = len(d)
     if r is None:
         r = np.sqrt(np.sum(d) / n)
 
-    H_assort = bethe_hessian_matrix(r, A, n, d)
-    H_disassort = bethe_hessian_matrix(-r, A, n, d)
-    assort_points = find_eigenvectors(H_assort, t, n)
-    disassort_points = find_eigenvectors(H_disassort, t, n)
+    H_assort = bethe_hessian_matrix(r, A, d)
+    H_disassort = bethe_hessian_matrix(-r, A, d)
+    assort_points = _find_eigenvectors(H_assort, t, n)
+    disassort_points = _find_eigenvectors(H_disassort, t, n)
     points = np.column_stack((assort_points, disassort_points))
 
     return points.shape[1]
 
 
 def b_matrix(A):
+    """Computes the non-backtracking matrix of A.
+
+    Args:
+        A (sparray): Adjacency matrix.
+
+    Returns:
+        B (sparray): The Non-backtracking matrix.
+    """
     n = A.shape[0]
     d = A.sum(1)
     D = sparse.diags(d)
@@ -197,7 +250,18 @@ def b_matrix(A):
     return B
 
 
-def non_backtracking(A, kmax, exact=True):
+def non_backtracking(A, kmax: int, exact: bool = True) -> int:
+    """Estimates the graph dimension using the non-backtracking matrix.
+
+    Args:
+        A (sparray): Adjacency matrix.
+        kmax (int): Maximal graph dimension to consider.
+        exact (float): Should the exact algorithm be used to compute the matrix
+            norm. Requires the dense form of A, more memory intensive.
+
+    Returns:
+        int: The computed dimension of the graph.
+    """
     B = b_matrix(A)
 
     if exact:
@@ -210,7 +274,4 @@ def non_backtracking(A, kmax, exact=True):
         w = e.eigenvalues
         v = e.eigenvectors
         print(f"Eigs did not converge. Computed {len(w)} eigenvectors")
-    # ind = np.argsort(w)[::-1]
-    # v = v[:,ind]
-    return np.sum(w > np.sqrt(b_n))
-
+    return np.sum(w > np.sqrt(b_n))[0]
