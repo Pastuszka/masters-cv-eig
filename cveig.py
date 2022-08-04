@@ -89,17 +89,9 @@ def gspectral(A_train, kmax):
     return w, v
 
 
-def gspectral_exact(A_train, kmax):
-    w, v = np.linalg.eig(A_train.todense())
-
-    ind = np.argsort(np.abs(w))[::-1]
-    v = v[:, ind]
-    return w, v
-
-
 def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
            folds: int = 5, normalize: bool = True,
-           is_directed: bool = False, return_t: bool = False) -> int:
+           return_t: bool = False) -> int:
     """Estimates the graph dimension using cross-validated eigenvalues.
 
     Args:
@@ -109,14 +101,13 @@ def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
         alpha (float): significance level for the test statistic
         folds (int): number of cv folds to perform
         normalize (bool): should the matrix A be normalized and regularized
-        is_directed (bool): should the graph be treated as directed
 
     Returns:
         int: The computed dimension of the graph.
     """
     t = np.empty((folds, kmax))
     for i in range(folds):
-        A_train, A_test = edge_splitting(A, eps, is_directed)
+        A_train, A_test = edge_splitting(A, eps)
         if normalize:
             A_train = norm_reg_matrix(A_train)
 
@@ -139,50 +130,6 @@ def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
         k = len(p_val_greater)
     return k
 
-
-def eig_cv_nie_pomaga(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
-           folds: int = 5, normalize: bool = True,
-           is_directed: bool = False, return_t: bool = False) -> int:
-    """Estimates the graph dimension using cross-validated eigenvalues.
-
-    Args:
-        A (sparray): Adjacency matrix
-        kmax (int): maximal graph dimension to consider
-        eps (float): splitting probability for edge splitting
-        alpha (float): significance level for the test statistic
-        folds (int): number of cv folds to perform
-        normalize (bool): should the matrix A be normalized and regularized
-        is_directed (bool): should the graph be treated as directed
-
-    Returns:
-        int: The computed dimension of the graph.
-    """
-    t = np.empty((folds, kmax))
-    for i in range(folds):
-        A_train, A_test = edge_splitting(A, eps, is_directed)
-        if normalize:
-            A_train = norm_reg_matrix(A_train)
-
-        w, v = np.linalg.eig(A_train.todense())
-
-        ind = np.argsort(np.abs(w))[::-1]
-        v = v[:, ind]
-        for j in range(0, kmax):
-            if j >= len(w):
-                t[i, j] = np.nan
-                continue
-            eigenvec = np.copy(v[:,j])
-            t[i,j] = test_stat(A, A_test, eigenvec, eps)
-    t_mean = np.nanmean(t, 0)
-    if return_t:
-        return t_mean
-    p_val = 1 - norm.cdf(t_mean)
-    p_val_greater = p_val >= alpha
-    if any(p_val_greater):
-        k = np.min(np.nonzero(p_val_greater))
-    else:
-        k = len(p_val_greater)
-    return k
 
 def eig_cv_mod(A, kmax: int, eps: float = 0.2,
                normalize: bool = True, is_directed: bool = False) -> int:
