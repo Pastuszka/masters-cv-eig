@@ -56,6 +56,7 @@ def test_stat(A, A_test, x: ndarray, eps) -> float:
     t = lam_test / sigma
     return t
 
+
 def norm_reg_matrix(A):
     """Computes the normalized and regularized adjacency matrix.
 
@@ -75,9 +76,30 @@ def norm_reg_matrix(A):
     return L
 
 
+def gspectral(A_train, kmax):
+    try:
+        w, v = sparse.linalg.eigs(A_train, k=kmax, which='LR')
+    except ArpackNoConvergence as e:
+        w = e.eigenvalues
+        v = e.eigenvectors
+        print(f"Eigs did not converge. Computed {len(w)} eigenvectors")
+
+    #ind = np.argsort(np.abs(w))[::-1]
+    #v = v[:, ind]
+    return w, v
+
+
+def gspectral_exact(A_train, kmax):
+    w, v = np.linalg.eig(A_train.todense())
+
+    ind = np.argsort(np.abs(w))[::-1]
+    v = v[:, ind]
+    return w, v
+
+
 def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
            folds: int = 5, normalize: bool = True,
-           is_directed: bool = False) -> int:
+           is_directed: bool = False, return_t: bool = False) -> int:
     """Estimates the graph dimension using cross-validated eigenvalues.
 
     Args:
@@ -97,15 +119,9 @@ def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
         A_train, A_test = edge_splitting(A, eps, is_directed)
         if normalize:
             A_train = norm_reg_matrix(A_train)
-        try:
-            w, v = sparse.linalg.eigs(A_train, k=kmax)
-        except ArpackNoConvergence as e:
-            w = e.eigenvalues
-            v = e.eigenvectors
-            print(f"Eigs did not converge. Computed {len(w)} eigenvectors")
 
-        ind = np.argsort(np.abs(w))[::-1]
-        v = v[:, ind]
+        w, v = gspectral(A_train, kmax)
+
         for j in range(0, kmax):
             if j >= len(w):
                 t[i, j] = np.nan
@@ -113,6 +129,8 @@ def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
             eigenvec = v[:,j].real
             t[i,j] = test_stat(A, A_test, eigenvec, eps)
     t_mean = np.nanmean(t, 0)
+    if return_t:
+        return t_mean
     p_val = 1 - norm.cdf(t_mean)
     p_val_greater = p_val >= alpha
     if any(p_val_greater):
@@ -121,6 +139,50 @@ def eig_cv(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
         k = len(p_val_greater)
     return k
 
+
+def eig_cv_nie_pomaga(A, kmax: int, eps: float = 0.2, alpha: float = 0.05,
+           folds: int = 5, normalize: bool = True,
+           is_directed: bool = False, return_t: bool = False) -> int:
+    """Estimates the graph dimension using cross-validated eigenvalues.
+
+    Args:
+        A (sparray): Adjacency matrix
+        kmax (int): maximal graph dimension to consider
+        eps (float): splitting probability for edge splitting
+        alpha (float): significance level for the test statistic
+        folds (int): number of cv folds to perform
+        normalize (bool): should the matrix A be normalized and regularized
+        is_directed (bool): should the graph be treated as directed
+
+    Returns:
+        int: The computed dimension of the graph.
+    """
+    t = np.empty((folds, kmax))
+    for i in range(folds):
+        A_train, A_test = edge_splitting(A, eps, is_directed)
+        if normalize:
+            A_train = norm_reg_matrix(A_train)
+
+        w, v = np.linalg.eig(A_train.todense())
+
+        ind = np.argsort(np.abs(w))[::-1]
+        v = v[:, ind]
+        for j in range(0, kmax):
+            if j >= len(w):
+                t[i, j] = np.nan
+                continue
+            eigenvec = np.copy(v[:,j])
+            t[i,j] = test_stat(A, A_test, eigenvec, eps)
+    t_mean = np.nanmean(t, 0)
+    if return_t:
+        return t_mean
+    p_val = 1 - norm.cdf(t_mean)
+    p_val_greater = p_val >= alpha
+    if any(p_val_greater):
+        k = np.min(np.nonzero(p_val_greater))
+    else:
+        k = len(p_val_greater)
+    return k
 
 def eig_cv_mod(A, kmax: int, eps: float = 0.2,
                normalize: bool = True, is_directed: bool = False) -> int:
@@ -274,4 +336,4 @@ def non_backtracking(A, kmax: int, exact: bool = True) -> int:
         w = e.eigenvalues
         v = e.eigenvectors
         print(f"Eigs did not converge. Computed {len(w)} eigenvectors")
-    return np.sum(w > np.sqrt(b_n))[0]
+    return np.sum(w > np.sqrt(b_n))
